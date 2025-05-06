@@ -10,7 +10,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from email.mime.text import MIMEText
 from flask_cors import CORS  
-
+# from flask import send_from_directory # for local
 
 
 
@@ -74,27 +74,36 @@ def calculate_score(resume_text, requirements, search_mode):
     
     return round((matched / total_keywords) * 10, 1)
 
-def send_email(file_path, content_score, structure_score, final_score, threshold):
+def send_email(file_path, content_score, structure_score, final_score, threshold, user_info):
     msg = MIMEMultipart()
     msg['From'] = app.config['SENDER_EMAIL']
     msg['To'] = app.config['HR_EMAIL']
     msg['Subject'] = f"Resume Evaluation: {final_score}/10"
-    
-    body = f"""Content Score: {content_score}/10
+
+    body = f"""Candidate Info:
+Full Name: {user_info.get('full_name')}
+First Name: {user_info.get('first_name')}
+Last Name: {user_info.get('last_name')}
+Email: {user_info.get('email')}
+Phone: {user_info.get('phone')}
+
+Evaluation Result:
+Content Score: {content_score}/10
 Structure Score: {structure_score}/10
 Final Score: {final_score}/10
 Threshold: {threshold}/10
-Status: {'PASS' if final_score >= threshold else 'FAIL'}"""
-    
+Status: {'PASS' if final_score >= threshold else 'FAIL'}
+"""
+
     msg.attach(MIMEText(body, 'plain'))
-    
+
     with open(file_path, 'rb') as f:
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(f.read())
         encoders.encode_base64(part)
         part.add_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
         msg.attach(part)
-    
+
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(app.config['SENDER_EMAIL'], app.config['EMAIL_PASSWORD'])
@@ -104,23 +113,31 @@ Status: {'PASS' if final_score >= threshold else 'FAIL'}"""
         print(f"Email error: {e}")
         return False
 
+
 # API Endpoints (matching your original routes)
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     if 'resume' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
-    
+
     file = request.files['resume']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    
+
     if not allowed_file(file.filename):
         return jsonify({'error': 'Only PDF/DOCX allowed'}), 400
-    
+
+    # Extract form fields
+    first_name = request.form.get('first_name', '')
+    last_name = request.form.get('last_name', '')
+    full_name = request.form.get('full_name', '')
+    email = request.form.get('email', '')
+    phone = request.form.get('phone', '')
+
     filename = secure_filename(file.filename)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
-    
+
     try:
         with open('requirements.json') as f:
             data = json.load(f)
@@ -129,21 +146,35 @@ def api_upload():
             threshold = data.get('threshold', 6)
     except Exception as e:
         return jsonify({'error': 'Requirements load failed'}), 500
-    
+
     resume_text = extract_resume_text(file_path)
     structure_score = evaluate_resume_structure(file_path)
     content_score = calculate_score(resume_text, requirements, search_mode)
     final_score = round(content_score * 0.7 + structure_score * 0.3, 1)
-    
+
     if final_score >= threshold:
-        send_email(file_path, content_score, structure_score, final_score, threshold)
-    
+        send_email(
+            file_path,
+            content_score,
+            structure_score,
+            final_score,
+            threshold,
+            {
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': full_name,
+                'email': email,
+                'phone': phone
+            }
+        )
+
     return jsonify({
         'content_score': content_score,
         'structure_score': structure_score,
         'final_score': final_score,
         'status': 'PASS' if final_score >= threshold else 'FAIL'
     })
+
 
 @app.route('/api/requirements', methods=['GET', 'POST'])
 def api_requirements():
@@ -164,8 +195,14 @@ def api_requirements():
         return jsonify({'error': str(e)}), 500
 
 
-# Add these routes to serve HTML files (NO API changes)
+# # Add these routes to serve HTML files (NO API changes)
+# @app.route('/')
+# def home():
+#     return send_from_directory('.', 'upload.html')
 
+# @app.route('/<filename>.html')
+# def html_files(filename):
+#     return send_from_directory('.', f'{filename}.html')
 
 
 if __name__ == '__main__':
