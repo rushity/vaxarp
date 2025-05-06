@@ -80,14 +80,14 @@ def send_email(file_path, content_score, structure_score, final_score, threshold
     msg['To'] = app.config['HR_EMAIL']
     msg['Subject'] = f"Resume Evaluation: {final_score}/10"
 
-    body = f"""Candidate Info:
+    body = f"""Candidate Information:
 Full Name: {user_info.get('full_name')}
 First Name: {user_info.get('first_name')}
 Last Name: {user_info.get('last_name')}
 Email: {user_info.get('email')}
 Phone: {user_info.get('phone')}
 
-Evaluation Result:
+Evaluation Results:
 Content Score: {content_score}/10
 Structure Score: {structure_score}/10
 Final Score: {final_score}/10
@@ -114,6 +114,7 @@ Status: {'PASS' if final_score >= threshold else 'FAIL'}
         return False
 
 
+
 # API Endpoints (matching your original routes)
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
@@ -128,11 +129,13 @@ def api_upload():
         return jsonify({'error': 'Only PDF/DOCX allowed'}), 400
 
     # Extract form fields
-    first_name = request.form.get('first_name', '')
-    last_name = request.form.get('last_name', '')
-    full_name = request.form.get('full_name', '')
-    email = request.form.get('email', '')
-    phone = request.form.get('phone', '')
+    user_info = {
+        'first_name': request.form.get('first_name', ''),
+        'last_name': request.form.get('last_name', ''),
+        'full_name': request.form.get('full_name', ''),
+        'email': request.form.get('email', ''),
+        'phone': request.form.get('phone', '')
+    }
 
     filename = secure_filename(file.filename)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -153,20 +156,7 @@ def api_upload():
     final_score = round(content_score * 0.7 + structure_score * 0.3, 1)
 
     if final_score >= threshold:
-        send_email(
-            file_path,
-            content_score,
-            structure_score,
-            final_score,
-            threshold,
-            {
-                'first_name': first_name,
-                'last_name': last_name,
-                'full_name': full_name,
-                'email': email,
-                'phone': phone
-            }
-        )
+        send_email(file_path, content_score, structure_score, final_score, threshold, user_info)
 
     return jsonify({
         'content_score': content_score,
