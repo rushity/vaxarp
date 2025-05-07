@@ -2,21 +2,19 @@ from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import os
 import json
-import fitz  # PyMuPDF
-from docx import Document
+import re
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from email.mime.text import MIMEText
-from flask_cors import CORS  
-# from flask import send_from_directory # for local
-
-
+from flask_cors import CORS
+from docx import Document
+from PyPDF2 import PdfReader
 
 app = Flask(__name__)
-CORS(app)  
-# Configuration (same as your original)
+CORS(app)
+
 app.secret_key = 'your-secret-key'
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['HR_EMAIL'] = 'firegg0711@gmail.com'
@@ -25,20 +23,27 @@ app.config['EMAIL_PASSWORD'] = 'aelm gfiq vtjz ozfr'
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Helper functions (same logic as your original)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf', 'docx'}
 
 def extract_text_from_pdf(file_path):
     text = ""
-    doc = fitz.open(file_path)
-    for page in doc:
-        text += page.get_text()
+    try:
+        reader = PdfReader(file_path)
+        for page in reader.pages:
+            if page.extract_text():
+                text += page.extract_text()
+    except Exception as e:
+        print("PDF read error:", e)
     return text
 
 def extract_text_from_docx(file_path):
-    doc = Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
+    try:
+        doc = Document(file_path)
+        return "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        print("DOCX read error:", e)
+        return ""
 
 def extract_resume_text(file_path):
     if file_path.endswith('.pdf'):
@@ -46,6 +51,44 @@ def extract_resume_text(file_path):
     elif file_path.endswith('.docx'):
         return extract_text_from_docx(file_path)
     return ""
+
+def extract_user_info(text):
+    user_info = {
+        'full_name': '',
+        'first_name': '',
+        'middle_name': '',
+        'last_name': '',
+        'email': 'Not found',
+        'phone': 'Not found'
+    }
+
+    # Extract phone
+    phone_match = re.search(r'(\+91[\s\-]?[6-9]\d{9})', text)
+    if phone_match:
+        user_info['phone'] = phone_match.group(1)
+
+    # Extract email
+    email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', text)
+    if email_match:
+        user_info['email'] = email_match.group(0)
+
+    # Extract name from first clean text line
+    for line in text.strip().split('\n'):
+        if line.strip() and '@' not in line and not re.search(r'\d', line):
+            user_info['full_name'] = line.strip()
+            parts = line.strip().split()
+            if len(parts) == 3:
+                user_info['first_name'] = parts[0]
+                user_info['middle_name'] = parts[1]
+                user_info['last_name'] = parts[2]
+            elif len(parts) == 2:
+                user_info['first_name'] = parts[0]
+                user_info['last_name'] = parts[1]
+            elif len(parts) == 1:
+                user_info['first_name'] = parts[0]
+            break
+
+    return user_info
 
 def evaluate_resume_structure(file_path):
     text = extract_resume_text(file_path)
@@ -63,15 +106,12 @@ def calculate_score(resume_text, requirements, search_mode):
         total_keywords = sum(len(subs) for subs in requirements.values())
         if total_keywords == 0:
             return 0
-        matched = sum(1 for main_point, sub_points in requirements.items()
-                     for keyword in sub_points
-                     if keyword.lower() in resume_text.lower())
+        matched = sum(1 for subs in requirements.values() for kw in subs if kw.lower() in resume_text.lower())
     else:
         total_keywords = len(requirements)
         if total_keywords == 0:
             return 0
-        matched = sum(1 for keyword in requirements if keyword.lower() in resume_text.lower())
-    
+        matched = sum(1 for kw in requirements if kw.lower() in resume_text.lower())
     return round((matched / total_keywords) * 10, 1)
 
 def send_email(file_path, content_score, structure_score, final_score, threshold, user_info):
@@ -83,6 +123,7 @@ def send_email(file_path, content_score, structure_score, final_score, threshold
     body = f"""Candidate Information:
 Full Name: {user_info.get('full_name')}
 First Name: {user_info.get('first_name')}
+Middle Name: {user_info.get('middle_name')}
 Last Name: {user_info.get('last_name')}
 Email: {user_info.get('email')}
 Phone: {user_info.get('phone')}
@@ -94,7 +135,6 @@ Final Score: {final_score}/10
 Threshold: {threshold}/10
 Status: {'PASS' if final_score >= threshold else 'FAIL'}
 """
-
     msg.attach(MIMEText(body, 'plain'))
 
     with open(file_path, 'rb') as f:
@@ -113,9 +153,6 @@ Status: {'PASS' if final_score >= threshold else 'FAIL'}
         print(f"Email error: {e}")
         return False
 
-
-
-# API Endpoints (matching your original routes)
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
     if 'resume' not in request.files:
@@ -128,18 +165,15 @@ def api_upload():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Only PDF/DOCX allowed'}), 400
 
-    # Extract form fields
-    user_info = {
-        'first_name': request.form.get('first_name', ''),
-        'last_name': request.form.get('last_name', ''),
-        'full_name': request.form.get('full_name', ''),
-        'email': request.form.get('email', ''),
-        'phone': request.form.get('phone', '')
-    }
-
     filename = secure_filename(file.filename)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
+
+    resume_text = extract_resume_text(file_path)
+    if not resume_text.strip():
+        return jsonify({'error': 'Could not extract text from resume'}), 400
+
+    user_info = extract_user_info(resume_text)
 
     try:
         with open('requirements.json') as f:
@@ -150,7 +184,6 @@ def api_upload():
     except Exception as e:
         return jsonify({'error': 'Requirements load failed'}), 500
 
-    resume_text = extract_resume_text(file_path)
     structure_score = evaluate_resume_structure(file_path)
     content_score = calculate_score(resume_text, requirements, search_mode)
     final_score = round(content_score * 0.7 + structure_score * 0.3, 1)
@@ -159,40 +192,13 @@ def api_upload():
         send_email(file_path, content_score, structure_score, final_score, threshold, user_info)
 
     return jsonify({
+        'user_info': user_info,
         'content_score': content_score,
         'structure_score': structure_score,
         'final_score': final_score,
         'status': 'PASS' if final_score >= threshold else 'FAIL'
     })
 
-
-@app.route('/api/requirements', methods=['GET', 'POST'])
-def api_requirements():
-    try:
-        with open('requirements.json', 'r+') as f:
-            if request.method == 'GET':
-                return jsonify(json.load(f))
-                
-            if request.method == 'POST':
-                data = request.get_json()
-                if not data:
-                    return jsonify({'error': 'No data provided'}), 400
-                
-                json.dump(data, f, indent=4)
-                return jsonify({'message': 'Requirements updated'})
-                
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# # Add these routes to serve HTML files (NO API changes)
-# @app.route('/')
-# def home():
-#     return send_from_directory('.', 'upload.html')
-
-# @app.route('/<filename>.html')
-# def html_files(filename):
-#     return send_from_directory('.', f'{filename}.html')
 
 
 if __name__ == '__main__':
