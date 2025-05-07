@@ -200,6 +200,26 @@ def api_upload():
     })
 
 
+@app.route('/api/requirements', methods=['GET', 'POST'])
+def api_requirements():
+    try:
+        if request.method == 'GET':
+            with open('requirements.json', 'r') as f:
+                return jsonify(json.load(f))
+        elif request.method == 'POST':
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+
+            # Overwrite file safely
+            with open('requirements.json', 'w') as f:
+                json.dump(data, f, indent=4)
+            return jsonify({'message': 'Requirements updated'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)
