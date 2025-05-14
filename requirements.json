@@ -1,0 +1,7 @@
+{
+    "search_mode": "whole",
+    "threshold": 6,
+    "requirements": [
+        "python"
+    ]
+}
