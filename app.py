@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 import os
 import json
+import re
 import fitz  # PyMuPDF
 from docx import Document
 from flask_cors import CORS
@@ -16,6 +17,44 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf', 'docx'}
+
+
+
+def extract_user_info(text):
+    user_info = {
+        'full_name': '',
+        'first_name': '',
+        'middle_name': '',
+        'last_name': '',
+        'email': 'Not found',
+        'phone': 'Not found'
+    }
+
+    phone_match = re.search(r'(\+91[\s\-]?[6-9]\d{9})', text)
+    if phone_match:
+        user_info['phone'] = phone_match.group(1)
+
+    email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', text)
+    if email_match:
+        user_info['email'] = email_match.group(0)
+
+    for line in text.strip().split('\n'):
+        if line.strip() and '@' not in line and not re.search(r'\d', line):
+            user_info['full_name'] = line.strip()
+            parts = line.strip().split()
+            if len(parts) == 3:
+                user_info['first_name'] = parts[0]
+                user_info['middle_name'] = parts[1]
+                user_info['last_name'] = parts[2]
+            elif len(parts) == 2:
+                user_info['first_name'] = parts[0]
+                user_info['last_name'] = parts[1]
+            elif len(parts) == 1:
+                user_info['first_name'] = parts[0]
+            break
+
+    return user_info
+
 
 def extract_text_from_pdf(file_path):
     text = ""
@@ -69,13 +108,9 @@ def api_upload():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Only PDF/DOCX allowed'}), 400
 
-    user_info = {
-        'first_name': request.form.get('first_name', ''),
-        'last_name': request.form.get('last_name', ''),
-        'full_name': request.form.get('full_name', ''),
-        'email': request.form.get('email', ''),
-        'phone': request.form.get('phone', '')
-    }
+resume_text = extract_resume_text(file_path)
+user_info = extract_user_info(resume_text)
+
 
     filename = secure_filename(file.filename)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
