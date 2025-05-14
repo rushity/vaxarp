@@ -2,9 +2,9 @@ from flask import Flask, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 import os
 import json
-import re
 import fitz  # PyMuPDF
 from docx import Document
+import re
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -18,7 +18,23 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in {'pdf', 'docx'}
 
+def extract_text_from_pdf(file_path):
+    text = ""
+    doc = fitz.open(file_path)
+    for page in doc:
+        text += page.get_text()
+    return text
 
+def extract_text_from_docx(file_path):
+    doc = Document(file_path)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+def extract_resume_text(file_path):
+    if file_path.endswith('.pdf'):
+        return extract_text_from_pdf(file_path)
+    elif file_path.endswith('.docx'):
+        return extract_text_from_docx(file_path)
+    return ""
 
 def extract_user_info(text):
     user_info = {
@@ -55,25 +71,6 @@ def extract_user_info(text):
 
     return user_info
 
-
-def extract_text_from_pdf(file_path):
-    text = ""
-    doc = fitz.open(file_path)
-    for page in doc:
-        text += page.get_text()
-    return text
-
-def extract_text_from_docx(file_path):
-    doc = Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-def extract_resume_text(file_path):
-    if file_path.endswith('.pdf'):
-        return extract_text_from_pdf(file_path)
-    elif file_path.endswith('.docx'):
-        return extract_text_from_docx(file_path)
-    return ""
-
 def evaluate_resume_structure(file_path):
     text = extract_resume_text(file_path)
     score = 3
@@ -108,13 +105,12 @@ def api_upload():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Only PDF/DOCX allowed'}), 400
 
-resume_text = extract_resume_text(file_path)
-user_info = extract_user_info(resume_text)
-
-
     filename = secure_filename(file.filename)
     file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     file.save(file_path)
+
+    resume_text = extract_resume_text(file_path)
+    user_info = extract_user_info(resume_text)
 
     try:
         with open('requirements.json') as f:
@@ -125,7 +121,6 @@ user_info = extract_user_info(resume_text)
     except Exception:
         return jsonify({'error': 'Requirements load failed'}), 500
 
-    resume_text = extract_resume_text(file_path)
     structure_score = evaluate_resume_structure(file_path)
     content_score = calculate_score(resume_text, requirements, search_mode)
     final_score = round(content_score * 0.7 + structure_score * 0.3, 1)
@@ -140,7 +135,6 @@ user_info = extract_user_info(resume_text)
         'resume_filename': filename
     }
 
-    # Save to candidates.json
     if os.path.exists('candidates.json'):
         with open('candidates.json', 'r') as f:
             all_candidates = json.load(f)
